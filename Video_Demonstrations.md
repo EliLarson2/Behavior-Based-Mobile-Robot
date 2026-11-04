@@ -42,7 +42,7 @@ This behavior served as the foundation for the later behavior-based control syst
 
 ## Light-Responsive Control
 
-**Video:** YOUTUBE_URL
+**Video:** [YOUTUBE_URL](https://www.youtube.com/shorts/lTN7m1CO_ic)
 
 ### Demonstrated Behavior
 
