@@ -60,32 +60,6 @@ The experiments include:
 
 These experiments demonstrate that relatively small changes in sensor-to-motor mapping can produce substantially different emergent robot behavior.
 
----
-
-## Sonar Obstacle Avoidance
-
-**Video:** YOUTUBE_URL
-
-### Demonstrated Behavior
-
-The ultrasonic sensor detects obstacles before they enter the range of the IR sensors.
-
-```text
-Distant Obstacle
-       |
-       v
-Ultrasonic Detection
-       |
-       v
-Gradual Steering Correction
-       |
-       v
-Continue Navigation
-```
-
-Sonar enables smoother early avoidance, while the IR system remains active as a higher-priority close-range safety behavior.
-
----
 
 ## Autonomous Exploration
 
