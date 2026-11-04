@@ -10,7 +10,7 @@ The GitHub documentation provides the technical explanation, while these videos 
 
 ## IR Obstacle Avoidance
 
-**Video:** YOUTUBE_URL
+**Video:** [YOUTUBE_URL](https://www.youtube.com/shorts/xT6mLoGzsBE)
 
 ### Demonstrated Behavior
 
