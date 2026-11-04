@@ -89,7 +89,7 @@ Sonar enables smoother early avoidance, while the IR system remains active as a 
 
 ## Autonomous Exploration
 
-**Video:** YOUTUBE_URL
+**Video:** [YOUTUBE_URL](https://www.youtube.com/shorts/R1nIKHBMqZE)
 
 ### Behavior Stack
 
