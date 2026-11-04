@@ -107,7 +107,7 @@ The robot continuously explores the environment without external control.
 
 ## Light-Seeking With Obstacle Avoidance
 
-**Video:** YOUTUBE_URL
+**Video:** [YOUTUBE_URL](https://www.youtube.com/shorts/vTtlNDzEta8)
 
 ### Behavior Stack
 
@@ -137,7 +137,7 @@ Collision Prevention
 
 ## Escape and Recovery
 
-**Video:** YOUTUBE_URL
+**Video:** [YOUTUBE_URL](https://www.youtube.com/shorts/nYax3AeUtw8)
 
 ### Behavior Stack
 
@@ -175,21 +175,3 @@ Repeated Collision Detection
 
 This prevents the robot from remaining indefinitely in corners or repetitive obstacle-response loops.
 
----
-
-## Why Include Physical Demonstrations?
-
-Robotics software cannot be completely evaluated from source code alone.
-
-Real systems introduce:
-
-- Sensor noise
-- Timing differences
-- Mechanical variation
-- Environmental conditions
-- Wheel traction
-- Sensor directionality
-- Threshold sensitivity
-- Interactions between behaviors
-
-The videos demonstrate how the embedded software performs once those real-world effects are introduced.
