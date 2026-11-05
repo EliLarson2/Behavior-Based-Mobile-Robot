@@ -1,104 +1,30 @@
 # Behavior-Based Autonomous Mobile Robot
 
-An autonomous mobile robot developed in Embedded C using **behavior-based control (BBC)**, combining infrared collision sensing, photoresistor light tracking, ultrasonic ranging, differential-drive control, and fixed-priority behavior arbitration.
+An autonomous differential-drive robot developed in Embedded C using **behavior-based control**.
 
-The project was developed incrementally across several Mobile Robotics laboratory projects. Each stage introduced a new sensing or control capability before those capabilities were integrated into a final autonomous system capable of:
+The robot combines close-range infrared sensing, photoresistor-based light tracking, ultrasonic ranging, differential-drive control, and fixed-priority behavior arbitration. It can explore its environment, steer toward a light source, respond to obstacles at multiple ranges, and execute a simple recovery maneuver after repeated collision encounters.
 
-- Exploring an environment autonomously
-- Following a light source
-- Detecting obstacles at multiple ranges
-- Avoiding collisions
-- Recovering from corners and repeated obstacle encounters
+The main challenge was not implementing any single sensor or behavior. It was getting several independently useful behaviors to work together on a physical robot without allowing navigation goals to override collision avoidance.
 
-The main engineering challenge was not simply implementing each behavior individually, but getting multiple behaviors with different priorities, sensors, and response characteristics to work together on a physical robot.
+## Video Demonstrations
 
----
+Physical demonstrations of the robot are available in [Video Demonstrations](Video_Demonstrations.md).
 
-## Project Demonstrations
-
-Physical demonstrations of the robot are available here:
-
-**Video_Demonstrations/README.md**
-
-The demonstrations include behaviors developed throughout the project such as:
-
-- IR obstacle avoidance
-- Light-responsive navigation
-- Sonar-based obstacle avoidance
-- Autonomous exploration
-- Light-seeking with obstacle avoidance
-- Escape and recovery behavior
+The demonstrations show the sensing and control behaviors developed throughout the project, including obstacle avoidance, light-responsive navigation, autonomous exploration, and recovery behavior.
 
 ---
 
-# Development Progression
+## Final Integrated System
 
-The final autonomous system was built incrementally.
+The cleaned implementation under [`src/`](src/) is the main portfolio version of the project.
 
-| Stage | Capability Added |
-|---|---|
-| **IR Avoidance** | Close-range obstacle detection, cruise behavior, collision avoidance, and escape concepts |
-| **Light Control** | ADC-based photoresistor sensing and Braitenberg-style sensor-to-motor control |
-| **Sonar Avoidance** | Ultrasonic time-of-flight ranging and smoother long-range obstacle avoidance |
-| **Integrated Tasks** | Fixed-priority behavior arbitration, exploration, light seeking, collision avoidance, and recovery |
+The firmware separates the system into three main pieces:
 
-This progression allowed individual behaviors to be developed and tested before combining them into the final system.
+- [`sensors.c`](src/sensors.c) acquires IR, photoresistor, and ultrasonic measurements.
+- [`behaviors.c`](src/behaviors.c) evaluates those measurements and selects a response.
+- [`main.c`](src/main.c) controls the update order, applies the final motor command, and displays the active behavior.
 
-The original milestone code is preserved under:
-
-```text
-src/
-├── IR_avoidance/
-├── light_control/
-├── sonar_avoidance/
-└── integrated_tasks/
-```
-
-The cleaned integrated implementation is contained directly under `src/`.
-
----
-
-# Final System Architecture
-
-The robot uses several sensors to build a simple representation of its immediate environment.
-
-```text
-        IR Sensors
-            |
-            |
-Photoresistors -----> SENSOR_DATA
-            |              |
-            |              |
-Ultrasonic Sensor ---------+
-                           |
-                           v
-                  +----------------+
-                  | Robot Behaviors |
-                  +----------------+
-                    |    |    |    |
-                    v    v    v    v
-                 CRUISE LIGHT SONAR IR
-                    \    |    |    /
-                     \   |    |   /
-                      v  v    v  v
-                   +--------------+
-                   | Arbitration  |
-                   +--------------+
-                          |
-                          v
-                    MOTOR_ACTION
-                          |
-                          v
-                  Differential Drive
-```
-
-Sensor acquisition is separated from behavior logic so each behavior operates on the same shared sensor state.
-
----
-
-# Sensor Data Structure
-
-Sensor measurements are collected into a shared structure:
+The shared types in [`robot_types.h`](src/robot_types.h) provide a clear interface between sensing and control:
 
 ```c
 typedef struct
@@ -111,55 +37,95 @@ typedef struct
 
     float sonar_dist;
 } SENSOR_DATA;
+
+typedef struct
+{
+    int speed_L;
+    int speed_R;
+    ROBOT_STATE state;
+} MOTOR_ACTION;
 ```
 
-This provides one interface between sensor acquisition and the behavior system.
+Sensor functions update one `SENSOR_DATA` object, while the behaviors read that shared state and modify one `MOTOR_ACTION`.
 
-Rather than having each behavior independently read hardware peripherals, sensor functions update `SENSOR_DATA`, and behaviors make decisions from that shared information.
+This keeps hardware acquisition out of the behavior functions. A behavior only needs to know what the robot currently senses and what motor response it wants—it does not need to independently configure the ADC, ping the ultrasonic sensor, or read the IR hardware.
+
+That separation made the final system easier to integrate and debug because sensor problems, arbitration problems, and motor-command problems could be investigated independently.
 
 ---
 
-# Sensors
+## Fixed-Priority Behavior Arbitration
 
-## Infrared Sensors
+The robot uses a simple fixed-priority controller. Each pass through the main loop evaluates the behaviors from lowest to highest priority:
 
-The left and right IR sensors provide close-range obstacle detection.
+```c
+CRUISE(&action);
+LIGHT_FOLLOW(&action, &sensors);
+SONAR_AVOID(&action, &sensors);
+IR_AVOID(&action, &sensors);
+ESCAPE(&action);
+```
 
-IR sensing is used for immediate collision response, where the robot needs to take decisive action instead of gradually adjusting its trajectory.
-
-Typical behavior:
+The resulting priority order is:
 
 ```text
-Obstacle on Left
-       |
-       v
-Stop / Reverse
-       |
-       v
-Turn Right
+CRUISE < LIGHT_FOLLOW < SONAR_AVOID < IR_AVOID < ESCAPE
 ```
 
-and vice versa for an obstacle on the right.
+`CRUISE` establishes the default forward command. If enough light is present, `LIGHT_FOLLOW` can change the left and right speeds to steer toward it. If sonar detects an obstacle, `SONAR_AVOID` takes precedence over normal navigation and light tracking.
+
+The two highest-priority behaviors are more decisive. `IR_AVOID` directly stops the robot, backs up, and turns away from a close-range obstacle. `ESCAPE` executes a stronger recovery maneuver after repeated IR events.
+
+This ordering reflects the role of each behavior:
+
+| Behavior | Role |
+| --- | --- |
+| `CRUISE` | Default forward movement |
+| `LIGHT_FOLLOW` | Goal-directed navigation |
+| `SONAR_AVOID` | Earlier obstacle response |
+| `IR_AVOID` | Immediate close-range collision response |
+| `ESCAPE` | Recovery after repeated collision encounters |
+
+The priority structure allows the robot to pursue a light source without disabling obstacle avoidance. Navigation provides the goal, but safety and recovery behaviors are allowed to interrupt it.
 
 ---
 
-## Photoresistors
+## Complementary Sensors
 
-Two photoresistors are connected through the robot's ADC subsystem.
+The robot uses three sensing methods because no single sensor handled every situation well.
 
-Early testing characterized the response under several lighting conditions:
+The photoresistors provide directional information for light-seeking behavior. Ultrasonic sensing identifies obstacles before the robot reaches collision range, but its response depends on obstacle alignment. The left and right IR sensors provide a more decisive close-range trigger.
 
-| Condition | Right Sensor | Left Sensor |
-|---|---:|---:|
-| Ambient table | 771 / 3.73 V | 741 / 3.46 V |
-| Ambient floor | 607 / 3.01 V | 543 / 2.73 V |
-| Bright light | 1023 / 5.00 V | 1023 / 5.00 V |
-| Sunlight | 1023 / 5.00 V | 1023 / 5.00 V |
-| Dark room | 10 / 0.05 V | 13 / 0.06 V |
+### Periodic Sensor Acquisition
 
-Testing showed that the right sensor consistently read slightly higher than the left.
+Each sensing function maintains its own timer object. In the integrated application, the configured update intervals are:
 
-A calibration offset was therefore introduced in later versions of the sensor-acquisition code.
+| Sensor | Update interval |
+| --- | ---: |
+| IR sensors | 125 ms |
+| Photoresistors | 150 ms |
+| Ultrasonic sensor | 100 ms |
+
+These are independent periodic updates rather than one simultaneous sensor read. When a sensor timer expires, its function updates the corresponding fields in `SENSOR_DATA`.
+
+The ultrasonic system is initialized alongside the ADC:
+
+```c
+void sensors_init(void)
+{
+    ADC_open();
+    ADC_set_VREF(ADC_VREF_AVCC);
+    USONIC_open();
+}
+```
+
+---
+
+## Light Following
+
+Light tracking uses two photoresistors connected through the robot's ADC subsystem.
+
+During testing, the right sensor consistently read slightly higher than the left under similar lighting. The final acquisition code applies a correction before storing the right-side measurement:
 
 ```c
 ADC_set_channel(ADC_CHAN3);
@@ -169,617 +135,240 @@ ADC_set_channel(ADC_CHAN4);
 s->photo_L = ADC_sample();
 ```
 
-This became important once the sensors were used for differential steering.
+The light-following behavior first checks whether the average light level is above an activation threshold of `150`. If it is, the robot compares the left and right readings.
+
+```c
+unsigned int avg =
+    (s->photo_L + s->photo_R) / 2;
+
+if (avg > LIGHT_MIN)
+{
+    int diff =
+        (int)s->photo_L - (int)s->photo_R;
+```
+
+A differential deadband of `±25` prevents the controller from reacting to small differences between the sensors. Without a deadband, minor measurement changes near equal illumination caused unnecessary steering corrections.
+
+When the difference exceeds the deadband, the robot reduces the speed on one side while leaving the other side at the normal following speed. When the readings are close, both sides remain at the same speed.
+
+This produces simple light-seeking behavior without requiring a map or planned path.
 
 ---
 
-## Ultrasonic Sensor
+## Ultrasonic Obstacle Avoidance
 
-The ultrasonic sensor provides longer-range obstacle detection using time-of-flight.
+The ultrasonic sensor provides longer-range obstacle awareness.
+
+The acquisition code converts the sensor's timing result into microseconds and then estimates distance:
 
 ```c
-ticks = USONIC_ping();
+SWTIME ticks = USONIC_ping();
 
-time_us =
-    10 * ((unsigned long int)ticks);
+unsigned long time_us =
+    10UL * (unsigned long)ticks;
 
 s->sonar_dist =
-    0.01724f * time_us;
+    0.01724f * (float)time_us;
 ```
 
-The conversion estimates distance from the measured ultrasonic round-trip time.
+During characterization, the sensor produced reasonable measurements when aimed directly at an obstacle:
 
-### Sonar Characterization
+| Actual distance | Measurement 1 | Measurement 2 | Wider angle |
+| ---: | ---: | ---: | --- |
+| 20 cm | 19.8 cm | 21.2 cm | No reading |
+| 30 cm | 27.1 cm | 29.0 cm | No reading |
+| 40 cm | 38.5 cm | 41.0 cm | No reading |
 
-| Actual Distance | Measurement 1 | Measurement 2 | Wider Angle |
-|---:|---:|---:|---|
-| 20 cm | 19.8 cm | 21.2 cm | No Reading |
-| 30 cm | 27.1 cm | 29.0 cm | No Reading |
-| 40 cm | 38.5 cm | 41.0 cm | No Reading |
+The poor wider-angle returns were an important result. They showed why sonar should not be treated as the robot's only collision sensor.
 
-The sonar sensor worked well when aligned with an obstacle but became significantly less reliable at wider angles.
+In the integrated controller, sonar acts as an early warning. When a valid distance falls below `20 cm`, `SONAR_AVOID` applies a steering correction before the robot reaches the close-range IR response.
 
-This made sonar useful for **early warning and smooth steering**, while the IR sensors remained necessary for reliable close-range collision avoidance.
+```c
+if (s->sonar_dist < 20.0f &&
+    s->sonar_dist > 0.0f)
+{
+    a->speed_L = 250;
+    a->speed_R = 350;
+    a->state = SONAR_AVOIDING;
+}
+```
+
+This behavior is intentionally less aggressive than the IR response. It attempts to steer away while the robot can still make a smooth correction.
 
 ---
 
-# Behavior-Based Control
+## Close-Range IR Avoidance
 
-The final robot uses **Behavior-Based Control** rather than one large centralized control algorithm.
+The left and right IR sensors handle immediate obstacle encounters.
 
-Each behavior performs one relatively simple task.
+When either sensor activates, `IR_AVOID` stops the stepper outputs, backs the robot away, and turns based on which side detected the obstacle.
 
-Examples include:
+- A left-side detection produces a right turn.
+- A right-side detection produces a left turn.
+- If both sensors are active, the robot backs away.
 
-```text
-CRUISE
-LIGHT_FOLLOW
-SONAR_AVOID
-IR_AVOID
-ESCAPE
+Unlike light following and sonar steering, this is a predefined motion sequence rather than a continuous speed adjustment. Once a close obstacle is detected, the robot needs a decisive response instead of another gradual correction.
+
+Each IR response also increments a repeated-event counter:
+
+```c
+if (s->left_IR || s->right_IR)
+{
+    a->state = IR_AVOIDING;
+    repeated_ir_events++;
+
+    STEPPER_stop(
+        STEPPER_BOTH,
+        STEPPER_BRK_ON);
+
+    backup();
 ```
 
-Complex robot behavior emerges from the interaction and prioritization of these simpler behaviors.
+This counter supports the robot's recovery behavior.
 
 ---
 
-# Servo vs. Ballistic Behaviors
+## Escape and Recovery
 
-Two general types of behavior are used.
+Simple reactive avoidance can put a robot into a repeated cycle, particularly near corners or closely spaced obstacles.
 
-## Servo Behaviors
+The integrated controller uses a straightforward recovery rule: after at least three IR events, `ESCAPE` executes another backup and turns right before resetting the counter.
 
-Servo behaviors continuously adjust outputs based on sensor measurements.
+```c
+if (repeated_ir_events >= 3)
+{
+    a->state = ESCAPING;
 
-Examples:
+    backup();
+    turn_right();
 
-- `LIGHT_FOLLOW`
-- `SONAR_AVOID`
+    repeated_ir_events = 0;
+}
+```
 
-These behaviors produce smoother corrections.
+This is intentionally a simple recovery mechanism. It does not estimate the robot's position or formally determine whether the robot is stuck. It only recognizes that repeated close-range responses have occurred and applies a stronger maneuver than normal avoidance.
 
-## Ballistic Behaviors
+Even with that limitation, it improved the robot's ability to move away from situations where the basic IR response repeatedly encountered another obstacle.
 
-Ballistic behaviors execute a predefined motion sequence when triggered.
+---
 
-Examples:
+## Motor Output
 
-- `IR_AVOID`
+Once the lower-priority steering behaviors have established the left and right speeds, `apply_motor_action()` sends the command to the differential-drive stepper interface:
+
+```c
+STEPPER_move_stnb(
+    STEPPER_BOTH,
+    STEPPER_FWD, 10000,
+    a->speed_L, 400,
+    STEPPER_BRK_OFF,
+    STEPPER_FWD, 10000,
+    a->speed_R, 400,
+    STEPPER_BRK_OFF);
+```
+
+The control system therefore has one final motor-action interface even though several behaviors may contribute to the decision.
+
+This became especially useful during integration. Behaviors could be adjusted without duplicating the normal continuous-drive command throughout the code.
+
+---
+
+## Physical Debugging
+
+Debugging the robot required more than inspecting variables in code. I needed to understand which behavior was active while the robot was moving.
+
+The LCD displays the current state as one of:
+
+- `CRUISE`
+- `LIGHT FOLLOW`
+- `SONAR AVOID`
+- `IR AVOID`
 - `ESCAPE`
 
-A typical ballistic obstacle response might be:
+This made it easier to distinguish between several possible problems during physical testing.
 
-```text
-Stop
-  |
-  v
-Reverse
-  |
-  v
-Turn
-  |
-  v
-Resume Normal Behavior
-```
+If the robot turned unexpectedly, I could determine whether the issue came from a sensor triggering incorrectly, a threshold being crossed, a higher-priority behavior activating, or the final motor response not matching the intended action.
 
-These behaviors are useful when an immediate, decisive maneuver is required.
+That visibility was particularly useful when tuning the light deadband, sonar threshold, and behavior priority. A behavior can work correctly by itself and still interact poorly with the rest of the system.
 
 ---
 
-# Fixed-Priority Arbitration
+## Development Milestones
 
-The final system uses the following behavior priority:
+The project was developed incrementally so individual sensing and control capabilities could be tested before integration.
 
-```text
-CRUISE
-   <
-LIGHT_FOLLOW
-   <
-SONAR_AVOID
-   <
-IR_AVOID
-   <
-ESCAPE
-```
+| Milestone | Main addition |
+| --- | --- |
+| [`IR_avoidance/`](src/IR_avoidance/) | Cruise, close-range collision response, and early escape concepts |
+| [`light_control/`](src/light_control/) | ADC photoresistor acquisition and Braitenberg-style light control |
+| [`sonar_avoidance/`](src/sonar_avoidance/) | Ultrasonic ranging and longer-range obstacle response |
+| [`integrated_tasks/`](src/integrated_tasks/) | Combined navigation, avoidance, arbitration, and recovery |
 
-Behaviors execute from lowest to highest priority.
-
-A lower-priority behavior may establish an initial motor command, but a higher-priority behavior can overwrite that command if its triggering conditions are active.
-
-For example:
-
-```text
-CRUISE says:
-"Drive forward"
-
-LIGHT_FOLLOW says:
-"Turn toward the light"
-
-SONAR_AVOID says:
-"Obstacle ahead, steer away"
-
-IR_AVOID says:
-"Collision imminent, reverse"
-
-ESCAPE says:
-"We are stuck, execute recovery"
-```
-
-Safety and recovery behaviors therefore override normal navigation.
+The milestone folders preserve the development progression. The cleaned files directly under `src/` are the main integrated implementation.
 
 ---
 
-# Light Following
+## What I Took Away From the Project
 
-Light-seeking navigation uses differential sensing between the left and right photoresistors.
+The most important lesson was that autonomous robotics is a systems-integration problem.
 
-```c
-void LIGHT_FOLLOW(
-    volatile MOTOR_ACTION *a,
-    volatile SENSOR_DATA *s)
-{
-    unsigned int avg =
-        (s->photo_L + s->photo_R) / 2;
+Each sensor had limitations. The photoresistors required calibration and a deadband. Sonar worked well at favorable angles but could miss angled obstacles. IR was useful at close range but reacted later. Combining them produced a more useful system than relying on any one sensor.
 
-    if (avg > 150)
-    {
-        int diff =
-            s->photo_L - s->photo_R;
+The same was true of the behaviors. Cruise, light following, sonar avoidance, and IR avoidance could each work independently while still producing unexpected results when combined. Their priority, trigger thresholds, steering strength, and recovery logic had to be tested on the physical robot.
 
-        if (diff > 25)
-        {
-            a->speed_L = 250;
-            a->speed_R = 350;
-        }
-        else if (diff < -25)
-        {
-            a->speed_L = 350;
-            a->speed_R = 250;
-        }
-        else
-        {
-            a->speed_L = 350;
-            a->speed_R = 350;
-        }
-    }
-}
-```
-
-Two important parameters were introduced:
-
-| Parameter | Value | Purpose |
-|---|---:|---|
-| Activation threshold | 150 | Determines whether sufficient light is present |
-| Differential deadband | ±25 | Prevents unnecessary steering when sensors are nearly equal |
-
-Without the deadband, small fluctuations around equal light intensity caused the robot to oscillate between steering directions.
+This project gave me practical experience moving beyond individual sensor drivers and into the more difficult question: **how should sensing, decision-making, and actuation interact when the robot is operating in the real world?**
 
 ---
 
-# Sonar Avoidance
+## What I Would Improve Today
 
-The sonar behavior provides smoother obstacle avoidance before the robot reaches the IR collision range.
+The first improvement I would make is adding filtering and hysteresis around sensor-driven transitions. A moving median or similar filter could reduce occasional sonar variation, while separate activation and release thresholds could prevent behaviors from rapidly switching near a boundary.
 
-```c
-void SONAR_AVOID(
-    volatile MOTOR_ACTION *a,
-    volatile SENSOR_DATA *s)
-{
-    if (s->sonar_dist < 20.0f &&
-        s->sonar_dist > 0.0f)
-    {
-        a->speed_L = 250;
-        a->speed_R = 350;
-    }
-}
-```
+I would also replace the repeated-IR-event counter with stronger evidence of whether the robot is actually making progress. Wheel motion or odometry could distinguish between several obstacle detections during normal exploration and a robot that is physically trapped.
 
-The threshold was set to approximately:
+Telemetry would make tuning more systematic. Logging photoresistor readings, sonar distance, IR states, selected behavior, and final motor commands would make it easier to reconstruct why the robot made a particular decision.
+
+A longer-term revision could add odometry and state-aware navigation. I would keep the reactive behaviors for immediate safety, but combine them with a better estimate of robot motion and progress.
+
+---
+
+## Repository Structure
 
 ```text
-20 cm
-```
-
-This creates a gradual steering response rather than immediately executing a reverse-and-turn maneuver.
-
----
-
-# IR Avoidance
-
-IR avoidance handles obstacles at close range.
-
-Unlike `SONAR_AVOID`, this behavior is ballistic.
-
-The response depends on which IR sensor detects the obstacle.
-
-| Detection | Response |
-|---|---|
-| Left IR | Reverse and turn right |
-| Right IR | Reverse and turn left |
-| Both IR sensors | Reverse away from obstacle |
-
-Because immediate collision avoidance is more important than normal navigation, `IR_AVOID` receives higher priority than both light following and sonar avoidance.
-
----
-
-# Escape and Recovery
-
-A major failure mode in simple autonomous robots occurs when repeated obstacle responses place the robot into a loop.
-
-For example:
-
-```text
-Obstacle
-   |
-Avoid
-   |
-Obstacle
-   |
-Avoid
-   |
-Obstacle
-   |
-   ...
-```
-
-The `ESCAPE` behavior was added to detect repeated collision events and execute a stronger recovery maneuver.
-
-```text
-Repeated IR Detections
-        |
-        v
-Virtual Stasis Detected
-        |
-        v
-Backup
-        |
-        v
-Turn
-        |
-        v
-Resume Normal Behaviors
-```
-
-This allows the robot to recover from corners and other situations where basic reactive avoidance is insufficient.
-
----
-
-# Final Control Loop
-
-The final system combines periodic sensor acquisition with ordered behavior execution:
-
-```c
-while (1)
-{
-    IR_sense(&sensors, 125);
-    Photo_sense(&sensors, 150);
-    SONAR_sense(&sensors, 100);
-
-    CRUISE(&action);
-    LIGHT_FOLLOW(&action, &sensors);
-    SONAR_AVOID(&action, &sensors);
-    IR_AVOID(&action, &sensors);
-    ESCAPE(&action);
-
-    LCD_debug(&action);
-
-    TMRSRVC_delay(100);
-}
-```
-
-Sensor update periods are intentionally not identical.
-
-| Sensor | Update Period |
-|---|---:|
-| IR | 125 ms |
-| Photoresistors | 150 ms |
-| Sonar | 100 ms |
-
-The timing reflects the different roles and limitations of the sensors.
-
----
-
-# Autonomous Tasks
-
-## 1. Autonomous Exploration
-
-The robot continuously explores the environment while avoiding obstacles.
-
-```text
-CRUISE
-   <
-SONAR_AVOID
-   <
-IR_AVOID
-```
-
-`CRUISE` provides normal forward motion.
-
-`SONAR_AVOID` provides early steering corrections.
-
-`IR_AVOID` provides the final close-range collision response.
-
----
-
-## 2. Light-Seeking Navigation
-
-The robot searches for and follows a light source while continuing to avoid obstacles.
-
-```text
-CRUISE
-   <
-LIGHT_FOLLOW
-   <
-SONAR_AVOID
-   <
-IR_AVOID
-```
-
-This allows the robot to pursue a navigation objective without disabling safety behaviors.
-
----
-
-## 3. Escape and Recovery
-
-The final task adds recovery behavior:
-
-```text
-CRUISE
-   <
-LIGHT_FOLLOW
-   <
-SONAR_AVOID
-   <
-IR_AVOID
-   <
-ESCAPE
-```
-
-This allows the robot to recover when lower-level behaviors repeatedly fail to make progress.
-
----
-
-# Debugging
-
-LCD output was used to show the currently active behavior.
-
-```c
-if (a->state == IR_AVOIDING)
-{
-    LCD_printf("IR AVOID\n");
-}
-else if (a->state == SONAR_AVOIDING)
-{
-    LCD_printf("SONAR AVOID\n");
-}
-else if (a->state == LIGHT_HOMING)
-{
-    LCD_printf("LIGHT FOLLOW\n");
-}
-else
-{
-    LCD_printf("CRUISE\n");
-}
-```
-
-This was particularly useful when debugging arbitration.
-
-If the robot moved incorrectly, the LCD allowed me to distinguish between:
-
-```text
-Bad Sensor Reading
-       vs.
-Wrong Behavior Trigger
-       vs.
-Incorrect Priority
-       vs.
-Motor-Control Problem
-```
-
-That made physical debugging substantially easier.
-
----
-
-# Engineering Challenges
-
-## Sonar Noise
-
-Ultrasonic measurements occasionally fluctuated or failed at unfavorable angles.
-
-Periodic sampling and threshold tuning reduced unstable responses.
-
-## Light-Sensor Calibration
-
-The two photoresistors did not produce identical measurements under the same lighting conditions.
-
-A calibration offset was applied to reduce this mismatch.
-
-## Light-Tracking Oscillation
-
-Small left/right changes near equal light levels caused steering jitter.
-
-A deadband reduced unnecessary corrections.
-
-## Behavior Interaction
-
-Individually correct behaviors did not automatically produce a correct overall robot.
-
-Priority order and steering strength had to be tuned experimentally.
-
-## Stuck Conditions
-
-Reactive obstacle avoidance sometimes produced repeated response loops.
-
-The escape behavior introduced a higher-level recovery mechanism.
-
----
-
-# Development Progression
-
-The project was developed through several milestones.
-
-```text
-Basic IR Stop
-      |
-      v
-IR Avoidance + Cruise
-      |
-      v
-Adaptive Escape
-      |
-      v
-Photoresistor ADC Measurement
-      |
-      v
-Braitenberg Light Control
-      |
-      v
-Ultrasonic Ranging
-      |
-      v
-Sonar Avoidance
-      |
-      v
-Behavior Arbitration
-      |
-      v
-Autonomous Exploration
-      |
-      v
-Light-Seeking Navigation
-      |
-      v
-Escape and Recovery
-```
-
-The milestone implementations are retained under:
-
-```text
-src/
-├── IR_avoidance/
-├── light_control/
-├── sonar_avoidance/
-└── integrated_tasks/
-```
-
----
-
-# Repository Structure
-
-```text
-Behavior-Based-Mobile-Robot/
-│
+.
 ├── README.md
-│
-├── src/
-│   ├── main.c
-│   ├── robot_types.h
-│   ├── sensors.c
-│   ├── sensors.h
-│   ├── behaviors.c
-│   ├── behaviors.h
-│   │
-│   ├── IR_avoidance/
-│   │   ├── README.md
-│   │   └── source.c
-│   │
-│   ├── light_control/
-│   │   ├── README.md
-│   │   └── source.c
-│   │
-│   ├── sonar_avoidance/
-│   │   ├── README.md
-│   │   └── source.c
-│   │
-│   └── integrated_tasks/
-│       ├── README.md
-│       └── source.c
-│
-└── Video_Demonstrations/
-    └── README.md
+├── Video_Demonstrations.md
+└── src/
+    ├── main.c
+    ├── robot_types.h
+    ├── sensors.c
+    ├── sensors.h
+    ├── behaviors.c
+    ├── behaviors.h
+    │
+    ├── IR_avoidance/
+    │   ├── README.md
+    │   └── source.c
+    │
+    ├── light_control/
+    │   ├── README.md
+    │   └── source.c
+    │
+    ├── sonar_avoidance/
+    │   ├── README.md
+    │   └── source.c
+    │
+    └── integrated_tasks/
+        ├── README.md
+        └── source.c
 ```
 
 ---
 
-# What I Learned
+## Background
 
-This project provided practical experience with:
+This project was completed individually for **Mobile Robotics I at the University of Nebraska–Lincoln**.
 
-- Embedded C
-- Autonomous robotics
-- ADC sensor acquisition
-- Infrared sensing
-- Ultrasonic time-of-flight ranging
-- Photoresistor calibration
-- Differential-drive control
-- Braitenberg vehicles
-- Behavior-based control
-- Servo behaviors
-- Ballistic behaviors
-- Fixed-priority arbitration
-- Sensor timing
-- Threshold tuning
-- Deadbands
-- Physical-system debugging
-- Autonomous recovery logic
-- Integrating independently developed subsystems
+The course milestones introduced the sensors and behaviors incrementally. The final integrated implementation brought them together into one autonomous robot with shared sensor data, fixed-priority behavior arbitration, differential-drive control, recovery logic, and on-robot debugging.
 
-The most important lesson was that autonomous robotics is fundamentally a **systems-integration problem**.
-
-A sensor, behavior, or controller can work correctly in isolation while still producing unexpected behavior when combined with the rest of the system.
-
----
-
-# Future Improvements
-
-If I continued developing the robot, I would investigate:
-
-### Sensor Filtering
-
-Add median or moving-average filtering to ultrasonic measurements.
-
-### Hysteresis
-
-Use separate activation and deactivation thresholds for behaviors to reduce oscillation.
-
-### Odometry
-
-Use wheel-motion estimates to better detect when the robot is physically stuck.
-
-### Telemetry
-
-Stream:
-
-- Sensor values
-- Active behavior
-- Motor commands
-- Sonar distance
-- Light readings
-
-over a serial connection for logging and analysis.
-
-### Dynamic Arbitration
-
-Investigate behavior scoring or dynamic arbitration rather than relying entirely on fixed priorities.
-
-### Mapping and Localization
-
-Add:
-
-- Encoders
-- Odometry
-- IMU data
-- Mapping
-- Localization
-
-to progress from reactive navigation toward state-aware autonomous navigation.
-
----
-
-# Background
-
-This project was developed for **Mobile Robotics I** at the University of Nebraska-Lincoln.
-
-The project was completed individually and developed incrementally across several laboratory assignments.
-
-The final implementation focuses on **integration and emergent behavior**, combining previously developed sensor and control modules into a complete autonomous robotic system.
+I include it in my portfolio because it shows the part of robotics I find most interesting: building individual sensing and control functions, then working through the much harder problem of making them behave reliably as one physical system.
